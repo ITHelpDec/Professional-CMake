@@ -338,3 +338,229 @@ Resist the urge to add a `lib` prefix to libraries names, as this will be prepen
 In this case, opt to take advantage more of `BUILD_SHARED_LIBS` in its place.
 
 Always specify either `PUBLIC`, `PRIVATE`, or `INTERFACE` when calling the `target_link_libraries()` command.
+
+### Testing
+`ctest` can be seen as a test scheduling and reporting tool - we would incorporate it in one our of builds as follows:
+```cmake
+cmake_minimum_required(VERSION 3.19)
+project(MyProj VERSION 4.7.2)
+
+enable_testing()
+
+add_executable(testingSomething testSomething.cpp)
+
+add_test(NAME SomethingWorks COMMAND testSomething)
+add_test(NAME ExternalTool COMMAND /path/to/tool someArg moreArg)
+```
+
+`enable_testing()` is required in order to tell CMake to prepare an input file for `ctest` (typically, it's called after `project()`).
+
+`add_test()` is used to define a test case - the `NAME` + `COMMAND` version is generally recommended.
+
+For `NAME`, CMake 3.19 supports quite a few types of characters, but ideally stick to letters, numbers, hyphens, and underscores.
+
+`COMMAND` can either be a bash command or a target, and - like with most programmes - a return code of `0` signifies success.
+
+The following commands would help run `ctest`:
+
+```cmake
+mkdir build
+cd build
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug ../source
+cmake --build .
+ctest
+```
+..., which I would probably condense to...
+```cmake
+cmake -S . -B build
+cmake --build build
+ctest
+```
+For multi-config generators, you can be more specific with arguments:
+```cmake
+cmake -S . -G "Ninja Multi-Config" build
+cmake --build build --config Debug
+ctest --build-config Debug # or `cmake -C Debug`
+```
+If working with many tests, we can introduce paralellism:
+```cmake
+ctest --parallel 16
+```
+Although, typically, I would write something like:
+```cmkae
+ctest -j $(nproc)
+```
+We can get more detailed test feedback by passing the `--verbose` / `-V` flag, or just the output when tests fail with `--output-on-failure`.
+
+> _"Generally, developers are better off learning to run ctest directly and take advantage of all its various options"_ – pg. 24
+
+### Installing
+
+Once we've built files from our project, we can then install them from the build (or source) directory - files can also be tweaked in some shape or form before or after the copy.
+
+We can use the `install()` to take care of this process:
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(MyProj VERSION 4.7.2)
+
+add_executable(MyApp ...)
+add_library(AlgoRuntime SHARED ...)
+add_library(AlgoSDK STATIC ...)
+
+# This concise form requires CMake 3.14 or later
+install(TARGETS MyApp AlgoRuntime AlgoSDK)
+```
+
+> _"When no destinations are given to tell CMake where to install the targets, CMake will use default locations that correspond to the convention used on most Unix systems"_ – pg. 25
+
+The same generally applies for Windows, but Apple's ecosystem is slightly different.
+
+CMake's default layout will install...
+* executables -> `bin` subdirectory below the base install location
+* libraries in  a `lib` subdirectory
+* headers in a `include` subdirectory
+
+You must explcitly specify `DESTINATION` when using CMake 3.13 or earlier:
+```cmake
+install(TARGETS MyApp AlgoRuntime AlgoSDK
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+)
+```
+
+Files and directories can also be installed:
+```cmake
+install(FILES things.h algo.h DESTINATION include/myproj)
+install(DIRECTORY headers/myproj DESTINATION include)  # recursively copy
+install(DIRECTORY headers/mypro/j DESTINATION include) # copy contents of myproj folder with the addition of the `/`
+```
+
+In CMake 3.23 and later, we can also use `file sets` to handle headers more easily:
+```cmake
+add_library(AlgoSDK ...)
+
+target_sources(AlgoSDK
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIR headers
+        FILES
+            headers/myproj/sdk.h
+            headers/myproj/sdk_version.h
+)
+
+install(TARGETS AlgoSDK FILE_SET api)
+```
+
+CMake 3.14 and later will use `include` as the defualt destination for headers when no destination is provided, and, when using `file sets`, the relative directory structure is retained from the `BASE_DIR` specified:
+```bash
+$ tree BASE_DIR
+BASE_DIR
+└── include
+    └── myproj
+        ├── sdk.h
+        └── sdk_version.h
+```
+
+> _"When installing libraries and headers for other projects to build against, it is recommended to provide a set of CMake-specific config package files as wel"_ – pg. 27
+
+```cmake
+cmake -S . -B debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build debug
+cmake --install debug --prefix /path/to/somewhere # `--install` available from CMake 3.15
+```
+If `--prefix` is not given, it will be taken from a platform-dependent value set during the configure step.
+
+You can also use multi-config generators:
+
+```cmake
+cmake -S . B build -G "Ninja Multi-Config"
+cmake --build build --config Debug
+cmake --install build --config Debug --prefix /path/to/somewhere
+```
+
+CMake also provides an `install` target, supported on all releases, but it isn't as flexible as `--install`.
+
+As a project grows, a single install package may no longer make sense - at that stage, it would make more sense to look at "Components" (which are addressed in later chapters).
+
+### Packaging
+Installing a project from source was so "2023" - it's all about pre-built packages now.
+
+`cpack` takes all the information from the `install()` commands and creates a package specific to your requirements (e.g. `.zip`, `.tar.gz`, `RPM`, `DEB`, etc., ...).
+
+> _"Internally, `cpack` effectively does one or more cmake `--install` commands with `--prefix` set to a temporary staging area.
+The contents of that staging area are then used to create a package in the relevant format"_ – pg. 28
+
+Basic packaging is invoked by setting a few variables and including the `CPack` module (this writes out an input file for the `cpak` tool):
+
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(MyProj VERSION 4.7.2)
+
+add_executable(MyApp ...)
+add_library(AlgoRuntime SHARED ...)
+add_library(AlgoSDK STATIC ...)
+
+install(TARGETS MyApp AlgoRuntime AlgoSDK)
+
+# These are project-specific
+set(CPACK_PACKAGE_NAME MyProj)
+set(CPACK_PACKAGE_VENDOR ITHelpDec)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "All your BASE_DIR are belong to us")
+
+# These lines tend to be the same for every project
+set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
+set(CPACK_VERBATIM_VARIABLES TRUE)
+
+# This is what writes out the input file for cpack
+include(CPack)
+```
+
+Another reminder that the `VERSION` keyword in `project()` can be a nice way to embed the version number in source files.
+
+Once we have our `CMakeLists.txt` file in place, we can build and package our project as follow:
+
+```cmake
+cmake -S . -B debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build debug
+cpack --config debug/CPackConfig.cmake -G "ZIP;WIX" # WIX doesn't appear to work on macOS
+```
+
+Again, multi-configuration builds also work as follows:
+```cmake
+cmake -S . -B build -G "Ninja Multi-Config"
+cmake --build build --config Release
+cpack -G "ZIP;WIX" --config Release # could not test on macOS
+```
+
+### `package` target
+> _"The project can override the default set by setting the `CPACK_GENERATOR` variable before calling `include(CPack)`"_ – pg. 29
+
+We can use basic flow control to decide how we want to package our project:
+
+```cmake
+if(WIN32)
+    set(CPACK_GENERATOR ZIP WIX)
+elseif(APPLE)
+    set(CPACK_GENERATOR TGZ productbuild)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    set(CPACK_GENERATOR TGZ RPM)
+else()
+    set(CPACK_GENERATOR TGZ)
+endif()
+```
+
+I'm surprised there isn't some form of switch statement instead of `if-else` logic.
+
+### Recommended Practices
+It's a good idea to do test `install()` commands to a temporary directory using the `--prefix` flag - just make sure the temporary staging area is empty, so it isn't influenced by previous builds.
+
+Consider installing files from the generated packages rather than from the build tree itself - installing directly from a build directory may require administrative privileges, which can cause hard-to-trace build errors.
+
+If the CMake version can be set to at least 3.23, then it is definitely worth investing time into becoming familiar with `file sets`.
+
+* Put all the project's header files in set sets
+* Use `PRIVATE` and `PUBLIC` file sets to clearly define which ones are meant to be installed, and which ones are not
+
+> _"This will also simplify the handling of header search paths, both when building the project, and when it is installed."_ – pg. 30
