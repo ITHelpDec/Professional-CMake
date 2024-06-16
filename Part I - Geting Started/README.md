@@ -207,3 +207,134 @@ You can use any amount of `=` signs (even none), but the opening and closing blo
 
 ### Recommended Practices
 If the project is intended to be built and distributed on Linux, it makes sense for the minimum CMake version to be dictated by the version of CMake provided by that same distribution e.g. Ubuntu 20.04 LTS -> CMake Version [3.16](https://launchpad.net/ubuntu/+source/cmake).
+
+### Executable++
+The more complete form of `add_executable()` is as follows:
+```cmake
+add_executable(targetName [WIN32] [MACOSX_BUNDLE]
+               [EXCLUDE_FROM_ALL]
+               source1 [source2 ...]
+)
+```
+* `WIN32` - when buildig on a Windows platform, this lets CMake know we are intending to build a Windows GUI application (i.e. with a `WinMain()` entry point, as opposed to the typical `main()` version).
+* `MACOSX_BUNDLE` - the directory structure differs when building for macOS, compared to iOS (flatter for iOS); CMake will also generation an `Info.plist` file for bundles.
+
+Both of these options will be ignored if not built on their applicable platforms.
+
+* `EXCLUDE_FROM_ALL` - when no target is specified at build time, the default `ALL` target is build; to exclude a specific target from this group, we can use this option.
+
+### Defining Libraries
+Library targets are defined using the `add_library()` function, and has a similar form to `add_executable()`:
+```cmake
+add_library(targetName [STATIC | SHARED | MODULE]
+            [EXCLUDE_FROM_ALL]
+            source1 [source2 ...]
+)
+```
+`STATIC` - `*.lib` on Windows, `*.a` on Unix-like platforms.
+`SHARED` - `*.dll` on Windows, `*dylib` on macOS, and `*.so` on other platforms.
+`MODULE` - somewhat like a shared library, but is intended to be loaded at dynamically at runtime, rather than being linked directory to the library or executable.
+
+The preferred practice is to omit this keyword.
+
+> _"In such cases, the library will be either `STATIC` or `SHARED`, with the choice determined by the value of a CMake variable called `BUILD_SHARED_LIBS`. If `BUILD_SHARED_LIBS` has been set to true, the library target will be a shared library, otherwise it will be static"_ – pg. 18
+
+We cam use this variable in combo with the `-D` flag to set it as follows:
+```cmake
+cmake -DBUILD_SHARED_LIBS=YES /path/to/source
+```
+We can also set this variable in the CMakeLists.txt file to keep the `cmake` command tidier by using the `set()` command.
+```cmake
+set(BUILD_SHARED_LIBS YES)
+```
+
+### Linking Targets
+The author provides good explanations of the various descriptors for linking targets - `PRIVATE`, `PUBLIC`, and `INTERFACE`:
+
+#### `PRIVATE`
+Library A uses library B for its own intenral implementation - anything else that links to library A doesn't need to know about library B
+
+#### `PUBLIC`
+Library A uses both library B internally AND in its interface i.e. A cannoy be used without B, so anything that uses A will also have a direct dependency on B. The example given in the book is as follows:
+
+> _An example of this would be a function defined in library A which has at least one parameter of a type defined and implemented in library B, so code cannot call the function from A without providing a parameter whose type comes from B""_ – pg. 18
+
+#### `INTERFACE`
+In order to use library A, parts of library B must also be used - this differs from `PUBLIC`, because A does not use B internally, only in its interface.
+
+In summary, ask the two following questions:
+1) Will A use B internally
+2) Will A use B in its interface
+
+The way to link libraries is as follows:
+```cmake
+target_link_libraries(targetName
+    <PRIVATE|PRUBLIC|INTERFACE> item1 [item2 ...]
+    [<PRIVATE|PRUBLIC|INTERFACE> item1 [item2 ...]]
+    ...
+)
+```
+There are also other `target_...()` commands - these will appear in later chapters, and were introduced from CMake 2.8.11 throguh to 3.2.
+
+Another interesting highlight from this chapter:
+> _"..., if using CMake 3.12 or earlier, the `targetName` used with `target_link_libraries()` must have been defined by an `add_executable()` or `add_library()` command in the same directory from which `target_link_libraries()` is being called (this restriction was removed in CMake 3.13)."_ – pg. 19
+
+### Linking non-targets
+Apart from linking existing CMake targets, we can also provide...
+* Full path to library link (prior to 3.3, you could search for a library by replacing the path, `/usr/lib/libfoo.sh` with `-lfoo`)
+* Plain library name (the linker command will search for that library
+* Link flag (items starting with a hyphen other than `-l` or `-framework` are treated as flags added to the linker command - these should only really be used
+
+### Older CMake Versions
+Previously, you could pass `debug` / `optimized` / `general` to the `target_link_libraries()` command, but this is discouraged now with newer versions.
+
+There was also an older form of `target_link_libraries()`, without the access specificer, but this is also discouraged:
+```cmake
+target_link_libraries(targetName item [item2 ...]) # almost like `PUBLIC`
+```
+Another form is...
+```cmake
+target_link_libraries(targetName
+    LINK_INTERFACE_LIBRARIES item [item ...]
+)
+```
+..., which was a pre-cursor to `INTERFACE`, and should be avoided due to its effect on target properties.
+
+And yet one more older version:
+```cmake
+target_link_libraries(targetName
+    <LINK_PRIVATE|LINK_PUBLIC> lib [lib...]
+   [<LINK_PRIVATE|LINK_PUBLIC> lib [lib...]]
+)
+```
+Again, opt for the newer `PUBLIC` / `PRIVATE` in its place.
+
+### Recommended Practices
+> _"Target names need not be related to the project name."_ – pg. 21
+
+Advice given is to "choose a target name according to what the target does, rather than the project it is part of", as some articles suggest defining a variable for the project name, and then reusing that variable for the name of an executable or library target - this is to be avoided.
+```cmake
+# BAD: Don't use a variable to set the project name - set it directly
+set(projectName MyExample)
+project(${projectName})
+```
+```cmake
+# BAD: Don't set the target name from the project name
+add_executable(${projectName} ...)
+```
+```cmake
+# GOOD: Set the project name directly
+project(MyProj)
+```
+```cmake
+# GOOD: Target name is independent of the project name
+add_executable(MyThing ...)
+```
+
+Resist the urge to add a `lib` prefix to libraries names, as this will be prepended to the library name by default on most platforms except Windows.
+
+> _"Avoid specifiying the `STATIC` or `SHARED` keyword for a library until it is known to be needed."_ – pg. 22
+
+In this case, opt to take advantage more of `BUILD_SHARED_LIBS` in its place.
+
+Always specify either `PUBLIC`, `PRIVATE`, or `INTERFACE` when calling the `target_link_libraries()` command.
