@@ -506,3 +506,393 @@ Avoid relying on environment variables being defined in order for the project to
 Consider using a prefix to distinguish cache variables from normal variables (e.g. `C_`) to help prevent the issues described earlier in the chapter around naming clashes.
 
 And speaking of naming variables, as with any language, be mindful of pre-defined variables within CMake (e.g. `WIN32`, `APPLE`, etc., ...).
+
+### Flow Control
+In CMake, we have the classic `if()`, `foreach()`, and `while()` flow control elements:
+```cmake
+if(expression1)
+    # commands ...
+elseif(expression2)
+    # commands ...
+else()
+    # commands ...
+endif()
+```
+`TRUE` (quoted or unquoted)
+* "ON"   / ON
+* "YES"  / YES
+* "TRUE" / TRUE
+* "Y"    / Y
+
+`FALSE` (quoted or unquoted)
+* "OFF"      / OFF
+* "NO"       / NO
+* "FALSE"    / FALSE
+* "N"        / N
+* "IGNORE"   / IGNORE
+* "NOTFOUND" / NOTFOUND
+* "" (empty string)
+* "<ANY_STRING>-NOTFOUND
+
+Be mindful of floating-point numbers that will truncate and become an inplicit boolean.
+
+We must also be mindful of the "fall-through" case:
+```cmake
+if(<variable|string>)
+```
+When unoquoted, the variable is compared to false constants - if there's no match, it returns true; an undefined variable returns an empty string, which we know now is a false constant, so returns false.
+
+**NB:** Environment variables will always return false.
+
+Quoted strings are a little trickier:
+* Doesn't match any of the true constants? Returns false. (CMake 3.1 and later)
+* Quoted string same name as existing variable? Quoted string substituted by value of simiarly-named unqouted string (before CMake 3.1)
+
+As a result, it's generally advised to avoid using quoted arguments with the `if(...)` form.
+
+### Logic Operators
+We can use the typical boolean modifiers `AND`, `NOT` and `OR` as part of our expression:
+```cmake
+if(NOT expression)
+if(expression1 AND expression2)
+if(expression1 OR expression2)
+
+if(NOT (expression1 AND (expression2 OR expression3)))
+```
+
+### Comparison Operators
+| Numeric                  | String                      | Version numbers                  | Path                     |
+| -------------            | ---------------             | --------------------             | -------------            |
+| `LESS`                   | `STRLESS`                   | `VERSION_LESS`                   |                          |
+| `GREATER`                | `STRGREATER`                | `VERSION_GREATER`                |                          |
+| `EQUAL`                  | `STREQUAL`                  | `VERSION_EQUAL`                  | `PATH_EQUAL`<sup>2</sup> |
+| `LESS_EQUAL`<sup>1</sup> | `STRLESS_EQUAL`<sup>1</sup> | `VERSION_LESS_EQUAL`<sup>1</sup> |                          |
+| `LESS_EQUAL`<sup>1</sup> | `STRLESS_EQUAL`<sup>1</sup> | `VERSION_LESS_EQUAL`<sup>1</sup> |                          |
+
+<sup>1</sup> - from CMake 3.7
+
+<sup>2</sup> - from CMake 3.24
+
+e.g.
+
+```cmake
+# TRUE
+if(2 GREATER 1)
+if("23" EQUAL 23)
+
+set(val 42)
+if(${val} EQUAL 42)
+if("${val}" EQUAL 42)
+
+# TRUE, but invalid (be mindful)
+if("23a" EQUALS 23)
+```
+For version numbers:
+```cmake
+if(1.2         VERSION_EQUAL   1.2.0)   # TRUE
+if(1.2         VERSION_LESS    1.2.3)   # TRUE
+if(1.2.3       VERSION_GREATER 1.2)     # TRUE
+if(2.0.1       VERSION_GREATER 1.9.7)   # TRUE
+if(1.8.2       VERSION_LESS    2)       # TRUE
+```
+`PATH_EQUAL` is quite clever, as you might have an environment vairable for a directory that includes a `/` by mistake - with `STREQUAL`, this would result in an issue; with `PATH_EQUAL`, however, any duplicated directory separators (`/`) would be collapsed into one e.g.
+
+```cmake
+# comparison is TRUE
+if("/a//////b/c" PATH_EQUAL "/a/b/c")
+    ...
+endif()
+
+# comparison is FALSE
+if("/a//////b/c" STREQUAL "/a/b/c")
+    ...
+endif()
+```
+
+CMake also support regular expressions:
+
+```cmake
+if(value MATCHES regex)
+```
+```cmake
+if("Hi from ${who}" MATCHES "Hi from (Fred|Barney).*")
+    message("${CMAKE_MATCH_1} says hello") # can be CMAKE_MATCH_<n>, depending on which match you want
+endif()
+```
+
+### File System Tests
+These are quite handy when flow control relies on the result of a file's / directory's state, e.g.:
+
+```cmake
+if(EXISTS pathToFileOrDir) # AND readable (bit of a gotcha)
+
+if(IS_READABLE pathToFileOrDir)   # from CMake 3.29
+if(IS_WRITABLE pathToFileOrDir)   # from CMake 3.29
+if(IS_EXECUTABLE pathToFileOrDir) # from CMake 3.29
+
+if(IS_DIRECTORY pathToDir)
+if(IS_SYMLINK fileName)
+if(IS_ABSOLUTE path)
+if(file1 IS_NEWER_THAN file2)
+```
+
+**NB**
+> _"Unlike most other if() expressions, none of the above operators perform any variable/string substitution without ${}, regardless of any quoting"_ – pg. 57
+
+`IS_NEWER_THAN` is a bit of a gotcha - if both files have the same timestamp, then it will return `TRUE` (false positive?), and it will also return `TRUE` if ANY one of the files is missing.
+
+Here's a good example from the book:
+
+```cmake
+set(firstFile  "/full/path/to/somewhere")
+set(secondFile "/full/path/to/somewhere")
+
+if(NOT EXISTS ${firstFile})
+    message(FATAL_ERROR "${firstFile} is missing")
+elseif(NOT EXISTS {$secondFile} OR
+       NOT ${secondFile} IS_NEWER_THAN ${firstFile}) # it's a good idea to reverse negate the logic sometimes
+    # ... commands to to recreate secondFile
+endif()
+```
+...would be fine, but this...
+```cmake
+if(${firstFile} IS_NEWER_THAN ${secondFile})
+    # ...
+endif()
+```
+...might offer a false sense of security, e.g. if `${firstFile}` doesn't exist.
+
+### Existence Tests
+```cmake
+if(DEFINED name)
+if(COMMAND name)
+if(POLICY name)
+if(TARGET name)
+if(TEST name)             # from CMake 3.4
+if(value IN_LIST listVar) # from CMake 3.3
+```
+
+### `DEFINED`
+Beyond just checking if any variable has been defined (regardless of value), we can also single out cache or environment variables:
+```cmake
+if(DEFINED SOMEVAR)
+if(DEFINED CACHE{SOMEVAR})) # CMake 3.14
+if(DEFINED ENV{SOMEVAR}))   # CMake 3.13
+```
+
+### `COMMAND`
+Like `DEFINED`, but for CMake commands (ideally the one's created by the user) - it's usually a better idea to test for a specific CMake version, if you want to check for the existence of a certain CMake command.
+
+### `POLICY`
+Handy for checking the existence of policies like the `CMP0060` policy described earlier in the book ([here](https://cmake.org/cmake/help/latest/policy/CMP0060.html)).
+
+### `TARGET`
+Pretty self-explanatory - helpful in larger hierarchies.
+
+### `TEST`
+Again, self-explanatory.
+
+### `IN_LIST`
+The right-hand operand must not be a string literal - it must always be a variable name.
+```cmake
+# Correct
+set(things A B C)
+if("B" IN_LIST things)
+    ...
+endif()
+
+# Incorrect
+if("B" IN_LIST "A;B;C")
+    ...
+endif()
+```
+
+### Hall of Shame
+```cmake
+if(WIN32)
+    set(platformImpl source_win.cpp)
+else()
+    set(platformImpl source_generic.cpp)
+endif()
+```
+It would be more accurate to use the following, though, as it expresses more accurately the intent to use the MinGW compiler:
+```cmake
+if(MSVC)
+    set(platformImpl source_win.cpp)
+...
+```
+`if(APPLE)` is another gotcha - just because we're building for macOS doesn't mean we're intending to use the Xcode generator.
+
+`if(CMAKE_GENERATOR STREQUAL "Xcode")` would express the intent more clearly.
+
+### Hall of Fame
+A good technique is the following for conditionally including targets given the state of a CMake option, e.g.
+```cmake
+option(BUILD_MYLIB "Enable building the MyLib target)
+if(BUILD_MYLIB)
+    add_library(MyLib src1.cpp src2.cpp)
+endif()
+```
+It becomes especially useful when creating scripted builds for the likes of CI.
+
+### Looping
+
+As you'd expect, `foreach()` is included as part of flow control for individual items...
+
+```cmake
+foreach(loopVar arg1 arg2 ...)
+    # loopVar takes the place of each argN
+endforeach()
+```
+...and lists of items...
+```cmake
+foreach(loopVar IN [LISTS listVar1 ...] [ITEMS item1 ...])
+    # ...
+endforeach()
+```
+For example:
+```cmake
+set(list1 A B)
+set(list2)
+set(foo WillNotBeShown)
+
+foreach(loopVar IN LISTS list1 list2 ITEMS foo bar)
+    message("Iteration for: ${loopVar}")
+endforeach()
+```
+...will print...
+```
+Iteration for: A
+Iteration for: B
+Iteration for: foo
+Iteration for: bar
+```
+We can also work through lists in parallel, as of CMake 3.17, with `ZIP_LISTS`, using almost a C++ "structured bindings"-style approach...
+```cmake
+foreach(var0 var1 IN ZIP_LISTS list1 list1)
+    message("Vars: ${var0} ${var1}")
+endforeach()
+```
+...or assign a generic loop variable name and append an `_N` suffix during the variable calls:
+```cmake
+foreach(var IN ZIP_LISTS list1 list1)
+    message("Vars: ${var_0} ${var_1}")
+endforeach()
+```
+
+The lists also don't need to be the same length:
+```cmake
+foreach(varLong VarShort IN ZIP_LISTS long short)
+    message("Vars: ${varLong} ${VarShort}")
+endforeach()
+```
+...produces...
+```
+Vars: A justOne
+Vars: B
+Vars: C
+```
+
+You can also supply ranges with either...
+```cmake
+foreach(loopVar RANGE start stop [step])
+```
+...or...
+```cmake
+foreach(loopVar RANGE value) # equivalent of RANGE 0 value
+```
+### `while()`
+`while()` follows a similar setup:
+```cmake
+while(condition)
+    # ...
+endwhile()
+```
+
+### Early exit
+Like with C-style languages, we can exit both `while()` and `foreach()` using the `break()` command, and skip ahead to the next iteration using the `continue()` command:
+```cmake
+foreach(outerVar IN ITEMS a b c)
+    unset(s)
+
+    foreach(innerVar IN ITEMS 1 2 3)
+        list(APPEND s ${outerVar}${innerVar})
+        string(LENGTH "${s}" length)
+
+        if(length GREATER 5)
+            break()
+        endif()
+
+        if(outerVar STREQUAL "b")
+            continue()
+        endif()
+
+        message("Processing ${outerVar}-${innerVar}")
+    endforeach()
+
+    message("Accumulated list: ${s}")
+endforeach()
+```
+...produces...
+```
+Processing a-1
+Processing a-2
+Accumulated list: a1;a2;a3
+Accumulated list: b1;b2;b3
+Processing c-1
+Processing c-2
+Accumulated list: c1;c2;c3
+```
+
+You can also use `break()` and `continue()` within `block()`s - the book provides a good example of this flow:
+```cmake
+set(log "Value: ")
+set(values one two skipMe three stopHere four)
+set(didSkip FALSE)
+
+while(NOT values STREQUAL "")
+    list(POP_FRONT values next)
+
+    block(PROPAGATE didSkip)
+        string(APPEND log "${next}")
+
+        if(next MATCHES "skip")
+            set(didSkip TRUE)
+            continue()
+        elseif(next MATCHES "stop")
+            break()
+        elseif(next MATCHES "t")
+            string(APPEND log ", has t")
+        endif()
+
+        message("${log}")
+    endblock()
+endwhile()
+
+message("Did skip: ${didSkip}")
+message("Remaining values: ${values}")
+```
+...produces...
+```
+Value: one
+Value: two, has t
+Value: three, has t
+Did skip: TRUE
+Remaining values: four
+```
+
+### Recommended Practices
+
+* Try not to mix strings up with variable names
+* Avoid unary expressions with quotes (opt for string comparison operations instead)
+* Use at least CMake 3.1 to disable the old behaviour that allowed implicit conversion of quoted string values to variable names
+
+* Capture regex results from `CMAKE_MATCH_<>` to variables as early as possible to prevent being overwritten
+
+* Avoid ambiguous loops, e.g.
+  * Give `RANGE` forms a definitive start and end
+  * Consider whether `IN LISTS` or `IN ITEMS` is more expressive of your intent (in place of the following..)
+
+```cmake
+foreach(loopVar item1 item2 ...)
+```
