@@ -896,3 +896,164 @@ Remaining values: four
 ```cmake
 foreach(loopVar item1 item2 ...)
 ```
+
+### Using Subdirectories
+
+We use two commands to help bring content from another file or build into the build:
+
+```cmake
+add_subdirectory()
+include()
+```
+
+Distributing the build logic across the directory hierarchy offers a few advantages:
+
+* Build logic is localised
+* Builds can be built up of subcomponents (especially helpful for projects that use submodules or embed third party source trees)
+* Turning parts of a build on / off becomes more trivial
+
+### `add_subdirectory()`
+```cmake
+add_subdirectory(sourceDir [binaryDir]
+    [EXCLUDE_FROM_ALL]
+    [SYSTEM] # from CMake 3.25
+)
+```
+NB: An added directory must have its own `CMakeLists.txt` (both relative and absolute paths can be added).
+
+CMake only requires `binaryDir` if the `sourceDir` is a path outside of the source tree.
+
+### Source and Binary Directory Variables
+
+CMake provides a number of variables to keep track of the source and binary directories for the `CMakeLists.txt` file currently being processed:
+
+* `CMAKE_SOURCE_DIR` - where the top-most directory (i.e. `CMakeLists.txt`) of the source tree resides (never changes)
+* `CMAKE_BINARY_DIR` - where the top-most direcotry of the build tree resides (never changes)
+
+* `CMAKE_CURRENT_SOURCE_DIR` - the directory of the `CMakeLists.txt` currently being processed (changes for every call to `add_subdirectory()` and it restored once processing is complete)
+* `CMAKE_CURRENT_BINARY_DIR` - the build directory of the `CMakeLists.txt` currently being processed (changes for every call to `add_subdirectory()` and is restored once processing is complete)
+
+An example has been included in the [variables](variables) directory.
+
+### Scope
+
+Calling `add_subdirectory()` adds a new scope block - that scope includes copying variables from the parent scope, obscuring local variables from the parent scope (modifications and un-setting of variables only take place in the child scope).
+
+I've attached an example in [scope](scope).
+
+`PARENT_SCOPE` can be used to change or unset a variable named one level up, e.g.:
+
+```cmake
+set(myVar bar PARENT_SCOPE) # adjusts the variable named "myVar" in the parent scope, but not the local
+```
+It is considered a better practice to define a local variable and then pass it back to the parent scope if you want the changes to propagate, e.g.:
+```cmake
+set(localVar bar)
+set(myVar${localVar}} PARENT_SCOPE)
+```
+
+### When to call `project()`
+In the top-level `CMakeLists.txt` file (rarely in the subdirectory files), although you can do multiple `project()` calls if you're working with Visual Studio - this can be very helpful for loading up only the portion of a larger codebase that is immediateful useful.
+
+Xcode behaves in a similar way, but does not include the logic for building in projects outside of the directory scope.
+
+### `include()`
+
+Include can also be used to pull in content from other directories:
+
+```cmake
+include(fileName [OPTIONAL] [RESULT_VARIABLE myVar] [NO_POLICY_SCOPE])
+include(module   [OPTIONAL] [RESULT_VARIABLE myVar] [NO_POLICY_SCOPE])
+```
+
+..., although it is slightly different to `add_subdirectory()`:
+
+* `include()` looks for a file; `add_subdirectory()` looks for a directory and the `CMakeLists.txt` inside.
+* `include()` doesn't introduce new variable scope
+* both introduce new poicy scope, but this can be suppressed in `include()` with `NO_POLICY_SCOPE`
+* `CMAKE_CURRENT_SOURCE_DIR` and `CMAKE_CURRENT_BINARY_DIR` don't change in `include()`
+
+It's worth noting that all, but the first point, hold true when including a module.
+
+There are also a few useful CMake variables that help when including a file:
+
+* `CMAKE_CURRENT_LIST_DIR`  - like `CMAKE_CURRENT_SOURCE_DIR`, but stores the directory of where your included file is
+* `CMAKE_CURRENT_LIST_FILE` - gives the name of the file being worked on
+* `CMAKE_CURRENT_LIST_LINE` - holds the line number of the file currently being processed (probably only useful for debugging)
+
+### Project-relative Variables
+
+It's worth being mindful of `CMAKE_CURRENT_DIR` and `CMAKE_CURRENT_DIR` when your project is incorporated into another project (e.g. when used as a git submodule, or as part of a `FetchContent()` call) - a few CMake variables exist to help with this:
+
+* `PROJECT_SOURCE_DIR`     - source directory of most recent call to `project()` (uses name from argument)
+* `projectName_SOURCE_DIR` - as above, but more explicit about the project
+* `PROJECT_BINARY_DIR`     - build directory of most recent call to `project()` (uses name from argument)
+* `projectName_BINARY_DIR` - as above, but more explicit about the project
+
+So, for example, if we had `project(topLevel)` then `topLevel_SOURCE_DIR` would point to our top-level direcotry, regardless of whether the project is built stand-alone or being incorporated into a larger project.
+
+An easy way to figure out if your project is the top-level project is to check if `CMAKE_SOURCE_DIR` and `CMAKE_CURRENT_SOURCE_DIR` are the same value:
+
+```cmake
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    add_subdirectory(packaging)
+endif()
+```
+
+In newer versions of CMake (3.21 or later), there is a dedicated variable for this exact purpose - `PROJECT_IS_TOP_LEVEL`:
+
+```cmake
+if(PROJECT_IS_TOP_LEVEL)
+    ...
+endif()
+```
+
+> _"A similar variable, `<projectName>_IS_TOP_LEVEL`, is also defined by CMake 3.21 or later for every call to `project()`"_ - pg. 75
+
+### Returning Processing Early
+
+Not called in a function? Ends processing of the current file via `include()` / `add_subdirectory()`
+Called in a function? Covered in later chapter.
+
+Before CMake 3.25, `return()` could not return values; from 3.25 onwards, we can now return values using the `PROPAGATE` keyword (like with `block()`) - it's a nice way of passing variables back up the chain
+
+```cmake
+# CMakeLists.txt
+
+set(x 1)
+set(y 2)
+add_subdirectory(subdir)
+
+# subdir/CMakeLists.txt
+
+cmake_minimum_required(VERISON 3.25) # needed for CMP0140
+
+set(x 3)
+unset(y)
+return(PROPAGATE x y)
+```
+
+Similar things can be done with `block()`, although having a `return(PROPAGATE myVar)` does not lose its effectiveness when inside of a `block()`.
+
+It's suggested that this is not considered a CMake best practice - consider this technique more for returning values from functions.
+
+There are some cool almost-"header guard" applications like from C/C++:
+
+```cmake
+if(DEFINED cool_stuff_include_guard)
+    return()
+endif()
+
+set(cool_stuff_include_guard 1)
+```
+
+..., although this can used more succinctly in CMake 3.10 with `include_guard()` - it can accept an optional `GLOBAL` or `DIRECTORY` keyword; `GLOBAL` will end the command if the file has been processed across the entire project, whereas `DIRECTORY` does the same thing in a reduced scope (within the current directory).
+
+### Recommended Practices
+
+* Typically, use `add_subdirectory()`
+* `CMAKE_CURRENT_LIST_DIR` is better than `CMAKE_CURRENT_SOURCE_DIR`
+* Steer clear of `CMAKE_SOURCE_DIR` and `CMAKE_BINARY_DIR`; where possible, opt for the `PROJECT_<>_DIR` / `projectName_<>_DIR` in their place
+* Avoid using `PROPAGATE` in `return()` statements (_"violates the best practice of preferring to attach info to targets, rather than passing details around in variables."_ - pg. 78)
+* Use `include_guard()` is using CMake 3.10 or later
+* Try avoid calling `project()` in every subdirectory (unless it can be considered its own standalone project)
