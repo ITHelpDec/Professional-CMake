@@ -1057,3 +1057,498 @@ set(cool_stuff_include_guard 1)
 * Avoid using `PROPAGATE` in `return()` statements (_"violates the best practice of preferring to attach info to targets, rather than passing details around in variables."_ - pg. 78)
 * Use `include_guard()` is using CMake 3.10 or later
 * Try avoid calling `project()` in every subdirectory (unless it can be considered its own standalone project)
+
+## Functions and Macros
+
+### The Basics
+
+Like with C/C++, functions introduce new scope, and macros are like `#define` macros.
+
+```cmake
+function(name [arg1 [arg2 [...]]])
+    # Function body
+endfunction()
+
+macro(name [arg1 [arg2 [...]]])
+    # Macro body
+endmacro()
+```
+
+NB: `name` should only consist of letters (case insensitive), numbers, and underscores; it is also no longer needed as an argument to close functions or macros.
+
+### Argument Handling Essentials
+In functions, arguments are like normal variables; in macros, arguments are string replacements e.g. this means that `DEFINED` will not return `true` for macro arguments:
+
+```cmake
+function(func arg)
+    if(DEFINED arg) # true
+...
+
+macro(macr arg)
+    if(DEFINED arg) # false
+...
+```
+
+Like with declaring `main()` in C/C++, there are a few pre-defined variables:
+ * `ARGC` - count of named and unnamed arguments
+ * `ARGV` - list of both named and unnamed arguments
+ * `ARGN` - like `ARGV`, but only the unnamed arguments
+
+You can also supply `ARGV<n>` (e.g. `ARGV0`) to reference indexed named variables, although bear in mind `<n>` is greater than `ARGC` is considered undefined behaviour.
+
+The author provides a good example of how we can use `ARGV` to create a generic function for assigning various files to their respective test executables:
+
+```cmake
+function(add_my_test targetName)
+    add_executable(${targetName} ${ARGV})
+
+    target_link_libraries({$targetName} private foobar)
+
+    add_test(NAME    ${targetName}
+             COMMAND ${targetName})
+endfunction()
+
+add_mytest(smallTest small.cpp)
+add_mytest(bigTest   big.cpp algo.cpp net.cpp)
+```
+
+> _"It allows a function or macro to take a varying number of arguments, yet still specify a set of named arguments which must be provided"_ – pg. 81
+
+The author provides a good example of where we might want to be minful when passing a function into a macro i.e. which `ARGN` will we be using?
+
+> _"When the macro is called from inside another function, the macro ends up using the ARGN variable from that enclosing function, not the ARGN from the macro itself"_ – pg. 82
+
+It's best to consider using a `function()` in place of a `macro()`, in situations like this.
+
+### Keyword Arguments
+CMake alows for the parsing of arguments with `cmake_parse_arguments()` - introduced in version 3.5, we can use the following syntax...
+
+```cmake
+cmake_parse_arguments(
+    prefix
+    valuelessKeywords singleValueKeywords nultiValueKeywords
+    argsToParse...
+)
+```
+..., and this addtional syntax in 3.7.
+
+```cmake
+# Do not use in macros
+cmake_parse_arguments(
+    PRASE_ARGV startIndex
+    prefix
+    valuelessKeywords singleValueKeywords nultiValueKeywords
+)
+```
+
+A reminder that macros use string replacement rather than variables for its arguments.
+
+The author provides a good example of this parser in action:
+
+```cmake
+function(func)
+    # Define the supported set of keywords
+    set(prefix       ARG)
+    set(noValues     ENABLE_NET COOL_STUFF)
+    set(singleValues TARGET)
+    set(multiValues  SOURCES IMAGES)
+
+    # Process the arguments passed in
+    include(CMakePraseArguments)
+    cmake_parse_arguments(
+        ${prefix}
+        "${noValues}" "${singleValues}" "${multiValues}"
+        ${ARGN}
+    )
+
+    # Log details for each supported keyword
+    message("Option summary:")
+
+    for each(arg IN LISTS noValues)
+        if(${prefix}_${arg})
+            message("  ${arg} enabled")
+        else()
+            message("  ${arg} disabled")
+        endif()
+    endforeach()
+endfunction()
+
+# Examples of calling with different combinations of keyword arguments
+
+func(SOURCES    foo.cpp bar.cpp
+     TARGET     MyApp
+     ENABLE_NET
+)
+
+func(COOL_STUFF
+     TARGET     dummy
+     IMAGES     here.png there.png gone.png
+)
+```
+
+The output will be:
+
+```
+# 1st func call
+Option summary:
+    ENABLE_NET enabled
+    COOL_STUFF disabled
+    TARGET = MyApp
+    SOURCES = foo.cpp;bar.cpp
+    IMAGES =
+
+# 2nd func call
+Option summary:
+    ENABLE_NET disabled
+    COOL_STUFF enabled
+    TARGET = dummy
+    SOURCES =
+    IMAGES = here.png;there.png;gone.png
+```
+
+This seems like it might be quite useful in a situation where you're trying to create a tuple-like structure.
+
+Any arguments that aren't linked to / prefaced by their "keys" (e.g. `ENABLE_NET`) can be accssed using the `<arg_name>_UNPARSED_ARGUMENTS` list:
+
+```cmake
+# similar to before...
+
+message("Leftover args: ${ARG_UNPARSED_ARGUMENTS}")
+foreach(arg IN LISTS ARG_UNPARSED_ARGUMENTS)
+    message("${arg}")
+endforeach()
+```
+
+The same goes for keywords that receive more arguments than they are expecting.
+
+If a non-`multiValue` keyword is missing a value, then they will be added to a `ARG_KEYWORDS_MISSING_VALUES` list.
+
+The author alos gives a good example of combining `group`s with multiple levels of `cmake_parse_arguments()` on page 87.
+
+One gotcha to be mindful of is that `cmake_parse_arguments()` doesn't function like `target_link_libraries()`, which allows for its keywords (`PUBLIC` / `PRIVATE` / `INTERFACE`) to be called multiple times:
+
+```cmake
+target_link_libraries(
+    PRIVATE lib1
+    PRIVATE lib2
+    PRIVATE lib3
+)
+```
+
+`cmake_parse_arguments()` would only parse the last `PRIVATE` keyword (`lib3`), discarding all the previous ones (`lib1` and `lib2`).
+
+In general, it's a good idea to opt for `cmake_parse_arguments()` than for an ad-hoc, manually-coded parser.
+
+### Returning Values
+
+> _"A fundamental difference between functions and macros is that functions introduce a new variable scope, whereas macros do not."_ – pg. 88
+
+Functions also receive a copy of all variables from the calling scope, whereas macros do not, which makes me wonder if, like in C++ value semantics, there are performance benefits to using macros over functions, or if they're equally as frowned upon in CMake, as they are in modern C++...
+
+We've already touched on the `PROPAGATE` keyword in earlier chapters (which will the nominated variables in the calling scope).
+
+Again, this takes effect from CMake 3.25 - in 3.24 and earlier you would have had to use `PARENT_SCOPE` within `set()` to get a similar result:
+
+```cmake
+function(func resultVar1 resultVar2)
+    set(${resultVar1} "First result" PARENT_SCOPE)
+    set(${resultVar2} "Second result" PARENT_SCOPE)
+endfunction()
+
+func(myVar otherVar)
+
+message("myVar:     ${myVar}")
+message("otherVar:  ${otherVar}")
+```
+...will produce...
+```
+myVar:    First result
+otherVar: Second result
+```
+
+### Returning Values from Macros
+
+Macros can follow a similar set pattern, but because, unlike functions, they do not have their own scope, we do not need to pass the `PARENT_SCOPE` keyword), so the above example can be changed to the following:
+
+```cmake
+- set(${resultVar1} "First result" PARENT_SCOPE)
++ set(${resultVar1} "First result")
+```
+
+**N.B. Be mindful of using `return()` inside a macro - it may not produce the effect you're looking for!**
+
+You have to imagine the contents of your macro are directly pasted into the place where you have called it.
+
+### Overriding Commands
+Interestingly, when `function()` or `macro()` is called to define a name that already exists, CMake will add a prefix to the existing function name.
+
+```cmake
+function(func)
+endfunction()
+...
+
+# Later in the file
+function(func) # new "func" function; previous "func" is now "_func"
+endfunction()
+```
+
+The general recommendation is to treat overloads like "Highlander" - "there can be only one".
+
+### Special Variables for Functions
+
+In CMake 3.17, there are some useful variables (similar to the reserved macros in C/C++ e.g. `__FUNCTION__`), that are useful for debugging:
+
+* `CMAKE_CURRENT_FUNCTION` (self-explanatory)
+* `CMAKE_CURRENT_FUNCTION_LIST_FILE` - file path to file that defined the currently-executing function
+* `CMAKE_CURRENT_FUNCTION_LIST_DIR` - absolute directory of the file that defines the currently-executing function
+* `CMAKE_CURRENT_FUNCTION_LIST_LINE` - line number of the function's definition
+
+It's worth noting that one variable will show where the function is _called_ (`CMAKE_CURRENT_LIST_DIR`), whereas the one described above (`CMAKE_CURRENT_FUNCTION_LIST_DIR`) will show where the called function is _defined_.
+
+The other gives a good example of how this might be used when copying files (this was a little less idiomatic to implement in versions earlier than 3.17).
+
+```cmake
+function(writeSomeFile toWhere)
+    configure_files(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/template.cpp in ${toWhere} @ONLY)
+endfunction()
+```
+
+### Other Ways of Invoking CMake Code
+
+The author provides a good example of how `cmake_language()` (introduced from CMake 3.18) allows for useful generics, that would, otherwise, rely on multiple `if()` statements:
+
+```cmake
+function(qt_generate_moc)
+    set(cmd qt${QT_DEFAULT_MAJOR_VERSION}_generate_moc)
+
+    cmake_language(CALL ${cmd} ${ARGV})
+endfunction()
+```
+
+The author also provides a really good use of `EVAL` over `CALL` in an example for delaying evaluation of variables to create a function that helps provide a backtrace (although, bear in mind this won't work in macros - only functions):
+
+```cmake
+set(myProjTraceCall) [=[
+    message("Called ${CMAKE_CURRENT_FUNCTION}")
+
+    set(__x 0)
+
+    while(__x LESS ${ARGC})
+        message("  ARGV{__x} = ${ARGV${__x}}")
+        math(EXPR __x "${__x} + 1")
+    endwhile()
+
+    unset(__x)
+]=])
+
+functino(func)
+    cmake_language(EVAL CODE "${myProjTraceCall}")
+    # ...
+endfunction()
+
+func(one two three)
+```
+
+This is really quite an impressive way of allowing developers to express intent.
+
+Speaking of deferral, you can even defer the execution of your command to the end of your directory (or another already-known directory's) scope).
+
+```cmake
+cmake_language(DEFER
+    CALL message "End of current scope processing"
+)
+
+cmake_language(DEFER
+    DIRECTORY ${CMAKE_SOURCE_DIR}
+    CALL message "End of top-level processing"
+)
+```
+
+You can also use IDs to help identify (or even group) deferrals for easier manipulation...
+
+```cmake
+cmake_language(DEFER
+    ID_VAR deferredId
+    CALL message "First deferred command"
+)
+
+cmake_language(DEFER
+    ID_VAR ${deferredId}
+    CALL message "Second deferred command"
+)
+```
+
+...and `DEFER` sub-commands can be used to interact with these IDs (e.g. querying, cancelling, etc.):
+
+```cmake
+cmake_language(DEFER [DIRECTORY dir] GET_CALL_IDS    outVar) # returns list of currently-queued IDs
+cmake_language(...                   GET_CALL     id outVar) # returns first command and its args for the ID passed
+cmake_language(...                   CANCEL_CALL  ids...   ) # discards all deferred commands with provided IDs
+```
+
+Whilst deferring seems cool, following code execution, as a reader, can be less intuitive than non-deferred commands, and could potentially lead to variable pollution, so it may be worth considering a refactor at that stage, instead of opting for the likes of `DEFER`.
+
+### Problems With Argument Handling
+
+Consecutive spaces are treated as one single argument separator, i.e. ...
+
+```cmake
+someCommand(a b c)
+someCommand(a     b     c)
+```
+...are the same.
+
+The same goes for multiple `;` separators (many equals one).
+
+```cmake
+someCommand(a b;c)
+someCommand(a;;;;b;c)
+```
+
+> _"Much of the confusion can be avoided by quoting arguments if they contain any variable evaluations. This eliminates any special interpretation of embedded spaces or semicolons."_ – pg. 98
+
+The author shares an interesting example of where a slight modification of `cmake_parse_argument()` can help stop `${ARGV}` from flatting two lists provided to a function:
+
+```cmake
+func("a;b;c" "d;e;f") # would otherwise be flattened to "a;b;c;d;e;f" without `PARSE_ARGV 0`
+
+cmake_parse_arguments(
+    PARSE_ARGV 0 ARG
+    "${noValues}" "${singleValues}" "${multiValues}"
+)
+```
+
+### Forwarding Command Arguments
+
+Another example of flattening is the following:
+
+```cmake
+function(inner)
+    message("inner:\n"
+            "ARGC = ${ARGC}\n"
+            "ARGN = ${ARGN}"
+    )
+endfunction()
+
+printArgs("a;b;c" "d;e;f")
+```
+```
+ARGC = 2
+ARGN = a;b;c;d;e;f
+```
+
+We can avoid this, by using a special technique from `cmake_parse_arguments()`:
+
+```cmake
+function(outer)
+    cmake_parse_arguments(PARSE_ARGV 0 FWD "" "" "")
+    inner(${FWD_UNPARSED_ARGUMENTS})
+endfunction()
+```
+...instead of this...
+```cmake
+function(outer)
+    message("outer:\n"
+            "ARGC = ${ARGC}\n"
+            "ARGN = ${ARGN}"
+    )
+    inner(${ARGN}) # naive forwarding
+endfunction()
+```
+
+..., or the following, if we want to account for and preserve empty arguments (requires CMake 3.18 or above):
+
+```cmake
+function(outer)
+    cmake_parse_arguments(PARSE_ARGV 0 FWD "" "" "")
+
+    set(quotedArgs "")
+    foreach(arg IN LISTS FWD_UNPARSED_ARGUMENTS)
+        string(APPEND quotedArgs " [===[${arg}]===]")
+    endforeach()
+
+    cmake_language(EVAL CODE "inner(${quotedArgs})")
+endfunction()
+```
+
+> _"Note the use of the bracket form for quoting. This ensures that any arguments with embedded quotes will be handled robustly too."_ – pg. 101
+
+This technique doesn't carry over to macros - flattening cannot be prevented, but, if you're interested in preserving empty strings, then you can use the following template:
+
+```cmake
+macro(outer)
+    string(REPLACE ";" "]===] [===[" args "[===[${ARGV}]===]")
+    cmake_language(EVAL CODE "inner(${args})")
+endmacro()
+```
+
+### Special Cases For Argument Expansion
+The author provides a good example of forwarding a command with arguments, so, instead of this...
+
+```cmake
+set(cmdWithArgs message STATUS "Hello, world!")
+cmake_language(CALL ${cmdWithArgs})
+```
+..., we call _this_:
+```cmake
+set(cmd message)
+set(args STATUS "Hello, world!")
+cmake_language(CALL ${cmd} ${args})
+```
+
+Other intricacies to be aware of is that `cmake_language(DEFER CALL)` defers the evaluation of the variables in the command's arguments, rather than the command itself.
+
+```cmake
+set(cmd message)
+set(args "before deferral")
+cmake_language(DEFER CALL ${cmd} ${args})
+
+set(cmd somethingElse)
+set(args "before deferral") # these arguments appear when the deferred call is made
+```
+
+If we want to evaluate both at the same time, then we need to wrap the `DEFER CALL` in an `EAVL CODE`:
+
+```cmake
+function(endOfScopeMessage msg)
+    # [[]] quoting is used to ensure spaces are handled properly
+    cmake_language(EVAL CODE "cmake_language(DEFER CALL message [[${msg}]])")
+endfunction()
+```
+
+### Boolean gotchas
+Be mindful of not using quotes on something you intend to be a string - this will be intepreted as a variable.
+
+> _"There is no way to get an argument to be treated as quoted when providing the argument to `if()` (or `while()`) through an expanded variable evaluation..."_ – pg. 104
+
+```cmake
+set(noQuotes   someVar STREQUAL xxxx)
+set(withQuotes someVar STREQUAL [["xxxx"]])
+
+if(${noQuotes})
+    message(YES)
+else()
+    message(NO)
+endif()
+
+if(${withQuotes})
+    message(YES)
+else()
+    message(NO)
+endif()
+```
+
+The author also gives a good example of how unevenly-matched square brackets can lead to strange behaviour when being evaluated, although this is quite a rare occurrence.
+
+### Recommended Practices
+
+* Prefer to opt for functions over macros
+* Avoid calling `return()` in a macro
+* Make use of `cmake_parse_arguments()` (improved robustness and scalability)
+* Be mindful of dropping empty arguments and list flattening when forwarding command arguments
+* Avoid using `cmake_language(DEFER)`
+* Have a central source for functions (typically, in `xxx.cmake` files in a direcotry just below the top level)
+* Avoid naming functions with a leading underscore (remember - it's for previous implementations that have been overloaded)
+* * Also don't override any built-in CMake command
+
+> _"Where the project's minimum CMake version is set to 3.17 or later, prefer to use `CMAKE_CURRENT_FUNCTION_LIST_DIR` to refer to any file or directory expected to exist at a location relative to the file in which a function is defined"_ – pg. 106
