@@ -1552,3 +1552,265 @@ The author also gives a good example of how unevenly-matched square brackets can
 * * Also don't override any built-in CMake command
 
 > _"Where the project's minimum CMake version is set to 3.17 or later, prefer to use `CMAKE_CURRENT_FUNCTION_LIST_DIR` to refer to any file or directory expected to exist at a location relative to the file in which a function is defined"_ – pg. 106
+
+### Properties
+> _"...a property provides information specific to the entity it is attached to."_ – pg. 107
+
+The `set_property()` is set up as follows...
+```cmake
+set_property(entitySpecific
+    [APPEND | APPEND_STRING]
+    PROPERTY propertyName values...
+)
+```
+..., where `entitySpecific` must be one of the following descriptors:
+
+```cmake
+GLOBAL
+DIRECTORY  [dir]
+TARGET     targets...
+SOURCE     sources...  # Addtional options from CMake 3.18
+INSTALL    files...
+TEST       tests...    # Addtional options from CMake 3.28
+CACHE      vars...
+VARIABLE
+```
+
+An example of this in action could be as follows...
+
+```cmake
+set_property(TARGET MyApp1 MyApp2
+    PROPERTY MYPROJ_CUSTOM_PROPERTY val1 val2 val3
+)
+```
+..., where the general recommendation is that custom property names are prefixed by the project name (capitalised).
+
+`APPEND` and `APPEND_STRING` have interesting attributes - `APPEND` will append list in a list; `APPEND_STRING` will (as the name suggests) combine like string, e.g.
+
+| Old | New | `APPEND` | `APPEND_STRING` |
+| --- | --- | --- | --- |
+| foo | bar | foo;bar | foobar |
+| a;b | c;d | a;b;c;d | a;bc;d |
+
+Once we've set a property, we can _get_ a property using the following syntax...
+
+```cmake
+get_property(resultVar entitySpecific
+    PROPERTY propertyName
+    [DEFINED | SET | BRIEF_DOCS | FULL_DOCS]
+)
+```
+
+...where `entitySpecific` is one of the following (similar to `set_property()`):
+
+```cmake
+GLOBAL
+DIRECTORY  [dir]
+TARGET     targets
+SOURCE     source  # Addtional options from CMake 3.18
+INSTALL    file
+TEST       test    # Addtional options from CMake 3.28
+CACHE      var
+VARIABLE
+```
+
+> _"The "VARIABLE" type is a bit different, with the variable name being specified as the propertyName rather than being attached to the "VARIABLE" keyword"_ – pg. 109
+
+> _"If none of the optional keywords are given, the value of the property is stored in the variable named by resultVar. This is the typical usage of the get_property() command"_ – pg. 109
+
+Here are the explanations of the optional variables:
+
+* `DEFINED` - is property previously-defined with `define_property()` (true or false)?
+* `SET` - was the named property successfully set (true or false)?
+
+N.B. - `SET` is usually preferred over `DEFINED`
+
+* `BRIEF_DOCS` - returns brief documentation string for property (otherwise, `NOTFOUND`)
+* `FULL_DOCS` - as above, but with full docs
+
+Plenty of great quotes in this chapter, so far:
+
+> _"Of the optional keywords, all but `SET` have little value unless the project has explicitly called `define_property()` to populate the requested information for the entity:"_
+
+```cmake
+define_property(entityType
+    PROPERTY propertyName
+    [INHERITED] # chains up to parent scope
+
+    # Mandatory for CMake 3.22 and earlier ("...unused by CMake other than providing them back to the project via get_property()")
+    [BRIEF_DOCS briefDoc [moreBriefDocs...]]
+    [FULL_DOCS fullDoc [moreFullDocs...]]
+
+    # Requires CMake 3.23 or later
+    [INITIALIZE_FROM_VARIABLE variableName]
+)
+```
+
+The `entityType` is this scenario must be one of the following:
+
+```cmake
+GLOBAL
+DIRECTORY
+TARGET
+SOURCE
+TEST
+VARIABLE
+CACHED_VARIABLE
+```
+
+For all entity types (bar `VARIABLE` and `CACHE`), if `INHERITED` is supplied and a property is requested, but not set, the search will recursively work up the chain until it reaches the top-level, and then `GLOBAL`.
+
+> _"When calling set_property() with APPEND or APPEND_STRING options, only the immediate value of the property is considered (i.e. no inheriting occurs when working out the value to append to)."_ – pg. 110
+
+For `INITIALIZE_FROM_VARIABLE`, "The variable name must end with the name of the property and cannot begin with `CMAKE_` or `_CMAKE_`" – pg. 110
+
+The author gives a good example of this in action:
+
+```cmake
+# Can be left unset to initialise the property with an empty value
+set(MYPROJ_SOMETOOL_OPTIONS --verbose)
+
+define_property(TARGET PROPERTY MYPROJ_SOMETOOL_OPTIONS
+    INITIALIZE_FROM_VARIABLE MYPROJ_SOMETOOL_OPTIONS
+)
+```
+
+### Global Properties
+Global properties are typically related to builds e.g. tools and structures.
+
+CMake offers a nice shorthand for getting global properties:
+
+```cmake
+get_cmake_property(resultVar property)
+```
+...instead of...
+```cmake
+get_property(resultVar GLOBAL
+    PROPERTY propertyName
+)
+```
+
+The `property` argument can be any argument, or some special ones:
+
+* `VARIABLES` - a list of all regular (i.e. non-cache) variables
+* `CACHE_VARIABLES` - as above, but for all cache variables
+* `COMMANDS` - returns list of all defined commands, functions and macros
+* `MACROS` - returns list of all defined macros
+* `COMPONENTS` - returns a list of components defined by `install()` commands
+
+These kind of properties are unique to `get_cmake_property()`.
+
+### Directory Properties
+> _"..., direcotry properties mostly focus on setting defaults for target properties and overriding global properties or defaults for the current directory."_ – pg. 111
+
+The get and set methods are as follows:
+
+```cmake
+set_directory_properties(PROPERTIES prop1 val1 [pro2 val2] ...)
+```
+```cmake
+get_directory_property(resultVar [DIRECTORY dir] property) # or
+get_directory_property(resultVar [DIRECTORY dir] DEFINITION varName)
+```
+
+It's not possible to `APPEND`, like with the more generic `set_property()` commands - only get (it also only applies to the current directory).
+
+The second getter is quite useful for getting a variable from outside of the scope your currently in (provided it's already been processed), but it's considered rarely useful, outside of debugging scenarios.
+
+### Target Properties
+Target properties are pretty important - the typical structure is...
+
+```cmake
+set_target_properties(target1 [target2...]
+    PROPERTIES
+        propertyName1 value1
+        [propertyName2 value2] ...
+)
+```
+```cmake
+get_target_property(resultVar target propertyName)
+```
+
+`set_target_properties()` doesn't have the same flexibility as the full-fat `set_property()` e.g. it doesn't support appending to existing property values, and it expect a string for its `value`, so if you intend to provide a list, you must provide it as a string with semicolon delimiters (`"this;is;a;list"`).
+
+### Source Properties
+
+Handy when you want to tweak the likes of compiler flags on file-by-file basis, rather than being limited to jut the target:
+
+```cmake
+set_source_files_properties(file1 [file2...]
+    PROPERTIES
+        propertyName1 value1
+        [propertyName2 value2] ...
+)
+```
+
+```cmake
+get_source_files_property(resultVar sourceFile propertyName)
+```
+
+Like, `get_target_properties`, no `APPEND` is supported.
+
+The author provides an interesting example to help remove specific files form a "unity build".
+
+```cmake
+add_executable(MyApp small.cpp big.cpp tall.cpp thin.cpp)
+
+set_source_files_properties(big.cpp PROPERTIES
+    SKIP_UNITY_BUILD_INCLUSION YES
+)
+```
+
+In CMake 3.17 and earlier, scope of souce properties was limited to directory - from 3.18, you can pass a few more options to give visibility to these properties (like in `set_property()`):
+
+```cmake
+set_source_files_properties(sources...
+    [DIRECTORY dirs...]                 # must have already been called
+    [TARGET_DIRECTORY targets...]
+    PROPERTIES
+        propertyName1 value1
+        [propertyName2 value2] ...
+)
+```
+
+```cmake
+get_source_files_property(resultVar source
+    [DIRECTORY dir | TARGET_DIRECTORY target]
+    propertyName
+)
+```
+
+> _"...note that it is possible for a source file to be compiled into multiple targets."_ – pg.  115
+
+**NB**
+There is one particular gotcha to watch out for, particularly for Unix Makefile generators.
+
+> _"If source properties are used to modify the compiler flags for specific source files rather than for a whole target, changing the source’s compiler flags will still result in all of the target’s sources being rebuilt, not just the affected source file."_ – pg. 115
+
+Looks like Xcode also has its own limitations with source properties, and there are concerns around performance degradation using source properties.
+
+There are better ways outlined in a later chaper.
+
+### Cache Variable Properties
+Aimed more at CMake GUI and console-based `ccmake tool` - doesn't really affect build.
+
+I'll probably refer back to the book, if I want to make these kinds of changes to be picked up on the UI.
+
+### Test Properties
+Just like the others, but more specific to tests:
+
+```cmake
+set_test_properties(test1 [test2...]
+    [DIRECTORY dir]                  # CMake 3.28 or later
+    PROPERTIES
+        propertyName1 value1
+        [propertyName2 value2] ...
+)
+```
+
+```cmake
+get_test_property(test propertyName
+    [DIRECTORY dir]                  # CMake 3.28 or later
+    resultVar
+)
+```
